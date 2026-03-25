@@ -91,18 +91,24 @@
     
     let score = 0;
     let highScore = localStorage.getItem('doodleHigh') || 0;
-    let gravity = 0.22;
+    
+    // --- CALIBRATED FOR 144Hz FEEL ---
+    let gravity = 0.055; // Accelerated gravity
     let platforms = [];
     let gameActive = false;
     let isRebinding = null;
     let bgOffset = 0;
+    let lastTime = 0;
 
     let savedBinds = JSON.parse(localStorage.getItem('doodleBinds')) || { left: "a", right: "d" };
     const activeInputs = { left: false, right: false, isTouching: false };
 
     const player = {
         x: 180, y: 300, width: 40, height: 40,
-        vx: 0, vy: 0, jumpStrength: -8.5, superJump: -16
+        vx: 0, vy: 0, 
+        jumpStrength: -16,  // Stronger jump for speed
+        superJump: -28,     // High speed spring
+        speed: 1.1          // Horizontal movement speed multiplier
     };
 
     function updateLabels() {
@@ -136,38 +142,24 @@
         }
     }
 
-    // --- FIXED POINTER LOGIC ---
     function updateDirection(e) {
         const rect = canvas.getBoundingClientRect();
         const clientX = e.clientX || (e.touches && e.touches[0].clientX);
         const x = clientX - rect.left;
         const mid = rect.width / 2;
-
-        if (x < mid) {
-            activeInputs.left = true;
-            activeInputs.right = false;
-        } else {
-            activeInputs.left = false;
-            activeInputs.right = true;
-        }
+        activeInputs.left = x < mid;
+        activeInputs.right = x >= mid;
     }
 
     touchLayer.addEventListener('pointerdown', (e) => {
-        if (!gameActive && !isRebinding) {
-            resetGame();
-        } else {
-            activeInputs.isTouching = true;
-            updateDirection(e);
-        }
+        if (!gameActive && !isRebinding) resetGame();
+        else { activeInputs.isTouching = true; updateDirection(e); }
     });
 
     touchLayer.addEventListener('pointermove', (e) => {
-        if (gameActive && activeInputs.isTouching) {
-            updateDirection(e);
-        }
+        if (gameActive && activeInputs.isTouching) updateDirection(e);
     });
 
-    // Reset movement when finger is lifted
     const stopTouch = () => {
         activeInputs.isTouching = false;
         activeInputs.left = false;
@@ -178,26 +170,26 @@
     touchLayer.addEventListener('pointerleave', stopTouch);
     touchLayer.addEventListener('pointercancel', stopTouch);
 
-    function update() {
+    function update(dt) {
         if (!gameActive) return;
 
-        player.vy += gravity;
-        player.y += player.vy;
-        player.x += player.vx;
+        // Apply physics using delta time (dt)
+        player.vy += gravity * dt;
+        player.y += player.vy * (dt / 16); // Normalized to ~60fps base for scale
+        player.x += player.vx * (dt / 16);
 
-        // Apply movement only if an input is active
-        if (activeInputs.left) player.vx = -4.5;
-        else if (activeInputs.right) player.vx = 4.5;
+        if (activeInputs.left) player.vx = -player.speed * 10;
+        else if (activeInputs.right) player.vx = player.speed * 10;
         else player.vx = 0;
 
         if (player.x > canvas.width) player.x = -player.width;
         if (player.x + player.width < 0) player.x = canvas.width;
 
         platforms.forEach(p => {
-            if (p.bounce > 0) p.bounce -= 1;
+            if (p.bounce > 0) p.bounce -= 0.5 * dt;
             if (player.vy > 0 && 
                 player.x + player.width > p.x && player.x < p.x + p.width &&
-                player.y + player.height > p.y && player.y + player.height < p.y + 20) {
+                player.y + player.height > p.y && player.y + player.height < p.y + 25) {
                 
                 player.vy = p.hasSpring && player.x + player.width > p.x + 20 && player.x < p.x + 40 
                             ? player.superJump : player.jumpStrength;
@@ -224,7 +216,7 @@
                 player.y = canvas.height - player.height;
             } else {
                 gameActive = false;
-                stopTouch(); // Ensure movement stops on death
+                stopTouch();
                 if (score > highScore) {
                     highScore = score;
                     localStorage.setItem('doodleHigh', highScore);
@@ -285,10 +277,7 @@
             updateLabels();
             return;
         }
-        if (e.code === "Space" && !gameActive) {
-            resetGame();
-            return;
-        }
+        if (e.code === "Space" && !gameActive) { resetGame(); return; }
         if (key === savedBinds.left) activeInputs.left = true;
         if (key === savedBinds.right) activeInputs.right = true;
     };
@@ -304,12 +293,29 @@
         initPlatforms();
         overlay.style.display = 'none';
         gameActive = true;
+        lastTime = performance.now(); // Reset timer to prevent huge physics jump
     }
 
     updateLabels();
     initPlatforms();
-    function loop() { update(); draw(); requestAnimationFrame(loop); }
-    loop();
+
+    function loop(currentTime) {
+        // Calculate the time since the last frame
+        const dt = currentTime - lastTime;
+        lastTime = currentTime;
+
+        // Cap dt to prevent massive jumps if the tab is minimized
+        const delta = Math.min(dt, 32); 
+
+        update(delta);
+        draw();
+        requestAnimationFrame(loop);
+    }
+
+    requestAnimationFrame((t) => {
+        lastTime = t;
+        loop(t);
+    });
 </script>
 </body>
 </html>
