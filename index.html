@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>doodle jump</title>
+    <style>
+        body { 
+            background: #1a1a1a; display: flex; justify-content: center; 
+            align-items: center; height: 100vh; margin: 0; 
+            font-family: 'Segoe UI', sans-serif; overflow: hidden;
+        }
+        #game-container { position: relative; box-shadow: 0 0 50px rgba(0,0,0,0.8); }
+        canvas { background: #f7faf7; border: 4px solid #333; border-radius: 8px; display: block; }
+        
+        #overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); display: flex;
+            flex-direction: column; justify-content: center; align-items: center;
+            color: white; border-radius: 4px;
+        }
+        .menu-content { text-align: center; background: #333; padding: 30px; border-radius: 15px; border: 2px solid #8bc34a; }
+        h1 { margin: 0; color: #8bc34a; }
+        
+        .control-group { margin: 15px 0; display: flex; gap: 10px; justify-content: center; align-items: center; }
+        .bind-btn { 
+            padding: 8px 12px; font-size: 13px; cursor: pointer; background: #444; 
+            border: 1px solid #666; border-radius: 5px; color: white; min-width: 90px;
+        }
+        .rebinding { background: #ff9800 !important; }
+
+        .floor-toggle { cursor: pointer; width: 18px; height: 18px; accent-color: #8bc34a; }
+        .label-text { font-size: 14px; color: #eee; }
+
+        #start-btn { 
+            padding: 12px 30px; font-size: 20px; font-weight: bold; margin-top: 10px;
+            cursor: pointer; background: #8bc34a; border: none; border-radius: 5px; width: 100%;
+        }
+        .stats { margin: 10px 0; font-size: 18px; color: #fff; }
+        .hint { font-size: 11px; color: #888; margin-top: 8px; }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="400" height="600"></canvas>
+        <div id="overlay">
+            <div class="menu-content">
+                <h1 id="status-title">meow</h1>
+                <div class="stats">
+                    <p id="final-score">Score: 0</p>
+                    <p id="high-score" style="color: #ffeb3b; font-size: 14px;">Best: 0</p>
+                </div>
+                
+                <div class="control-group">
+                    <button id="bind-left" class="bind-btn" onclick="startRebind('left')">Left: A</button>
+                    <button id="bind-right" class="bind-btn" onclick="startRebind('right')">Right: D</button>
+                </div>
+
+                <div class="control-group">
+                    <input type="checkbox" id="floor-bounce" class="floor-toggle">
+                    <span class="label-text">godmode</span>
+                </div>
+
+                <button id="start-btn" onclick="resetGame()">START</button>
+                <p class="hint">SPACE to play</p>
+            </div>
+        </div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const overlay = document.getElementById('overlay');
+    const floorCheckbox = document.getElementById('floor-bounce');
+
+    // --- PLAYER SPRITE ---
+    let imgLoaded = false;
+    const playerImg = new Image();
+    playerImg.onload = () => { imgLoaded = true; };
+    playerImg.onerror = () => { imgLoaded = false; };
+    playerImg.src = 'test.png';
+    
+    let score = 0;
+    let highScore = localStorage.getItem('doodleHigh') || 0;
+    let gravity = 0.22;
+    let platforms = [];
+    let gameActive = false;
+    let isRebinding = null;
+    let bgOffset = 0;
+
+    let savedBinds = JSON.parse(localStorage.getItem('doodleBinds')) || { left: "a", right: "d" };
+    const activeInputs = { left: false, right: false };
+
+    const player = {
+        x: 180, y: 300, width: 40, height: 40,
+        vx: 0, vy: 0, jumpStrength: -8.5, superJump: -16
+    };
+
+    function updateLabels() {
+        document.getElementById('bind-left').innerText = `Left: ${savedBinds.left.toUpperCase()}`;
+        document.getElementById('bind-right').innerText = `Right: ${savedBinds.right.toUpperCase()}`;
+        document.getElementById('high-score').innerText = `Best: ${highScore}`;
+    }
+
+    function startRebind(action) {
+        isRebinding = action;
+        document.getElementById(`bind-${action}`).classList.add('rebinding');
+        document.getElementById(`bind-${action}`).innerText = "Wait...";
+    }
+
+    function createPlatform(y) {
+        return {
+            x: Math.random() * (canvas.width - 60),
+            y: y,
+            width: 60, height: 14,
+            bounce: 0,
+            hasSpring: Math.random() < 0.15
+        };
+    }
+
+    function initPlatforms() {
+        platforms = [];
+        platforms.push({ x: 170, y: 520, width: 60, height: 14, bounce: 0, hasSpring: false });
+        for (let i = 1; i < 7; i++) {
+            platforms.push(createPlatform(520 - (i * 100)));
+        }
+    }
+
+    function update() {
+        if (!gameActive) return;
+
+        player.vy += gravity;
+        player.y += player.vy;
+        player.x += player.vx;
+
+        if (activeInputs.left) player.vx = -4.5;
+        else if (activeInputs.right) player.vx = 4.5;
+        else player.vx = 0;
+
+        if (player.x > canvas.width) player.x = -player.width;
+        if (player.x + player.width < 0) player.x = canvas.width;
+
+        platforms.forEach(p => {
+            if (p.bounce > 0) p.bounce -= 1;
+            if (player.vy > 0 && 
+                player.x + player.width > p.x && player.x < p.x + p.width &&
+                player.y + player.height > p.y && player.y + player.height < p.y + 20) {
+                
+                player.vy = p.hasSpring && player.x + player.width > p.x + 20 && player.x < p.x + 40 
+                            ? player.superJump : player.jumpStrength;
+                p.bounce = 10;
+            }
+
+            if (player.y < canvas.height / 2) {
+                let diff = (canvas.height / 2) - player.y;
+                player.y = canvas.height / 2;
+                bgOffset += diff * 0.5;
+                platforms.forEach(plat => {
+                    plat.y += diff;
+                    if (plat.y > canvas.height) {
+                        Object.assign(plat, createPlatform(0));
+                        score++;
+                    }
+                });
+            }
+        });
+
+        // --- DEATH OR BOUNCE LOGIC ---
+        if (player.y > canvas.height) {
+            if (floorCheckbox.checked) {
+                player.vy = player.jumpStrength; // Bounce off the bottom
+                player.y = canvas.height - player.height;
+            } else {
+                gameActive = false;
+                if (score > highScore) {
+                    highScore = score;
+                    localStorage.setItem('doodleHigh', highScore);
+                }
+                document.getElementById('status-title').innerText = "OUCH!";
+                document.getElementById('final-score').innerText = "Score: " + score;
+                updateLabels();
+                overlay.style.display = 'flex';
+            }
+        }
+    }
+
+    function draw() {
+        ctx.fillStyle = '#f7faf7'; 
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Pattern
+        ctx.fillStyle = '#e0eee0';
+        const spacing = 40;
+        const size = 6;
+        for (let x = 0; x < canvas.width; x += spacing) {
+            for (let y = -spacing; y < canvas.height + spacing; y += spacing) {
+                const drawY = (y + (bgOffset % spacing));
+                ctx.beginPath();
+                ctx.roundRect(x + 17, drawY + 17, size, size, 2); 
+                ctx.fill();
+            }
+        }
+
+        // --- PLAYER (Always tries test.png) ---
+        if (imgLoaded) {
+            ctx.drawImage(playerImg, player.x, player.y, player.width, player.height);
+        } else {
+            ctx.fillStyle = '#8bc34a';
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+        }
+
+        platforms.forEach(p => {
+            ctx.fillStyle = '#5d4037';
+            ctx.fillRect(p.x, p.y + p.bounce, p.width, p.height);
+            if (p.hasSpring) {
+                ctx.fillStyle = '#ff5722';
+                ctx.fillRect(p.x + 20, p.y - 8 + p.bounce, 20, 8);
+            }
+        });
+
+        ctx.fillStyle = 'rgba(0,0,0,0.08)';
+        ctx.font = 'bold 80px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(score, canvas.width / 2, 100);
+    }
+
+    window.onkeydown = (e) => {
+        const key = e.key.toLowerCase();
+        if (isRebinding) {
+            savedBinds[isRebinding] = key;
+            localStorage.setItem('doodleBinds', JSON.stringify(savedBinds));
+            document.getElementById(`bind-${isRebinding}`).classList.remove('rebinding');
+            isRebinding = null;
+            updateLabels();
+            return;
+        }
+        if (e.code === "Space" && !gameActive) {
+            e.preventDefault();
+            resetGame();
+            return;
+        }
+        if (key === savedBinds.left) activeInputs.left = true;
+        if (key === savedBinds.right) activeInputs.right = true;
+    };
+
+    window.onkeyup = (e) => {
+        const key = e.key.toLowerCase();
+        if (key === savedBinds.left) activeInputs.left = false;
+        if (key === savedBinds.right) activeInputs.right = false;
+    };
+
+    function resetGame() {
+        score = 0; player.x = 180; player.y = 300; player.vy = 0; bgOffset = 0;
+        initPlatforms();
+        overlay.style.display = 'none';
+        gameActive = true;
+    }
+
+    updateLabels();
+    initPlatforms();
+    function loop() { update(); draw(); requestAnimationFrame(loop); }
+    loop();
+</script>
+</body>
+</html>
